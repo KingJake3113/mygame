@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rocket League with Adjusted Bumping</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #333; font-family: Arial, sans-serif; }
+        canvas { display: block; }
+        #menu { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+        }
+        button {
+            font-size: 18px;
+            padding: 10px 20px;
+            margin: 10px;
+            cursor: pointer;
+        }
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 24px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="menu">
+        <h1>Rocket League Clone</h1>
+        <button id="vsPlayerBtn">1v1 Player</button>
+        <button id="vsAIBtn">1v1 AI</button>
+    </div>
+    <div id="score"></div>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const menu = document.getElementById('menu');
+        const vsPlayerBtn = document.getElementById('vsPlayerBtn');
+        const vsAIBtn = document.getElementById('vsAIBtn');
+        const scoreElement = document.getElementById('score');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const FRICTION = 0.98;
+        const BALL_BOUNCINESS = 0.8;
+        const BUMP_FORCE = 4; // Decreased from 8
+        const BUMP_COOLDOWN = 500; // ms
+        const BUMPER_KNOCKBACK_RATIO = 0.2; // New constant for bumper's knockback
+
+        let gameMode = null; // 'player' or 'ai'
+        let gameLoop = null;
+        let scores = { player1: 0, player2: 0 };
+
+        class Car {
+            constructor(x, y, color, isAI = false) {
+                this.x = x;
+                this.y = y;
+                this.width = 60;
+                this.height = 30;
+                this.color = color;
+                this.speed = 0;
+                this.maxSpeed = 5;
+                this.acceleration = 0.1;
+                this.rotationSpeed = 0.03;
+                this.angle = 0;
+                this.isAI = isAI;
+                this.state = 'chase';
+                this.controls = {};
+                this.lastBumpTime = 0;
+                this.mass = 1;
+                this.dx = 0;
+                this.dy = 0;
+            }
+
+            update(ball, otherCar) {
+                if (this.isAI) {
+                    this.updateAI(ball);
+                } else {
+                    this.updatePlayer();
+                }
+
+                this.speed *= FRICTION;
+                this.dx *= FRICTION;
+                this.dy *= FRICTION;
+                this.speed = Math.max(-this.maxSpeed, Math.min(this.maxSpeed, this.speed));
+
+                this.x += Math.cos(this.angle) * this.speed + this.dx;
+                this.y += Math.sin(this.angle) * this.speed + this.dy;
+
+                this.x = Math.max(this.width / 2, Math.min(canvas.width - this.width / 2, this.x));
+                this.y = Math.max(this.height / 2, Math.min(canvas.height - this.height / 2, this.y));
+
+                this.checkCollisionWithOtherCar(otherCar);
+            }
+
+            updatePlayer() {
+                if (keys[this.controls.up]) this.speed += this.acceleration;
+                if (keys[this.controls.down]) this.speed -= this.acceleration;
+                if (keys[this.controls.left]) this.angle -= this.rotationSpeed;
+                if (keys[this.controls.right]) this.angle += this.rotationSpeed;
+            }
+
+            updateAI(ball) {
+                const dx = ball.x - this.x;
+                const dy = ball.y - this.y;
+                const angleToBall = Math.atan2(dy, dx);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance > 100) {
+                    this.angle = angleToBall;
+                    this.speed = this.maxSpeed;
+                } else {
+                    this.speed = 0;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+                ctx.restore();
+            }
+
+            checkCollisionWithOtherCar(otherCar) {
+                const dx = otherCar.x - this.x;
+                const dy = otherCar.y - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < this.width && Date.now() - this.lastBumpTime > BUMP_COOLDOWN) {
+                    const angle = Math.atan2(dy, dx);
+                    const relativeSpeed = Math.sqrt(
+                        Math.pow(this.speed * Math.cos(this.angle) - otherCar.speed * Math.cos(otherCar.angle), 2) +
+                        Math.pow(this.speed * Math.sin(this.angle) - otherCar.speed * Math.sin(otherCar.angle), 2)
+                    );
+                    const impactForce = BUMP_FORCE * relativeSpeed;
+
+                    // Apply full force to the bumped car
+                    otherCar.dx += Math.cos(angle) * impactForce / otherCar.mass;
+                    otherCar.dy += Math.sin(angle) * impactForce / otherCar.mass;
+
+                    // Apply reduced knockback to the bumping car
+                    this.dx -= Math.cos(angle) * impactForce * BUMPER_KNOCKBACK_RATIO / this.mass;
+                    this.dy -= Math.sin(angle) * impactForce * BUMPER_KNOCKBACK_RATIO / this.mass;
+
+                    this.lastBumpTime = Date.now();
+                    otherCar.lastBumpTime = Date.now();
+                }
+            }
+        }
+
+        const ball = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: 20,
+            dx: 0,
+            dy: 0,
+            mass: 0.5
+        };
+
+        const goalWidth = 20;
+        const goalHeight = 200;
+
+        const keys = {};
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawGoals() {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, canvas.height / 2 - goalHeight / 2, goalWidth, goalHeight); // Left goal
+            ctx.fillRect(canvas.width - goalWidth, canvas.height / 2 - goalHeight / 2, goalWidth, goalHeight); // Right goal
+        }
+
+        function moveBall() {
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+
+            ball.dx *= FRICTION;
+            ball.dy *= FRICTION;
+
+            // Ball collision with the left and right walls
+            if (ball.x - ball.radius < 0) {
+                ball.x = ball.radius;
+                ball.dx = -ball.dx * BALL_BOUNCINESS;
+            } else if (ball.x + ball.radius > canvas.width) {
+                ball.x = canvas.width - ball.radius;
+                ball.dx = -ball.dx * BALL_BOUNCINESS;
+            }
+
+            // Ball collision with the top and bottom walls
+            if (ball.y - ball.radius < 0) {
+                ball.y = ball.radius;
+                ball.dy = -ball.dy * BALL_BOUNCINESS;
+            } else if (ball.y + ball.radius > canvas.height) {
+                ball.y = canvas.height - ball.radius;
+                ball.dy = -ball.dy * BALL_BOUNCINESS;
+            }
+        }
+
+        function checkCollision(car) {
+            const dx = ball.x - car.x;
+            const dy = ball.y - car.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < ball.radius + Math.max(car.width, car.height) / 2) {
+                const angle = Math.atan2(dy, dx);
+                const relativeSpeed = Math.sqrt(
+                    Math.pow(car.speed * Math.cos(car.angle) - ball.dx, 2) +
+                    Math.pow(car.speed * Math.sin(car.angle) - ball.dy, 2)
+                );
+                const impactForce = relativeSpeed * (car.mass + ball.mass) / 2;
+
+                ball.dx += Math.cos(angle) * impactForce / ball.mass;
+                ball.dy += Math.sin(angle) * impactForce / ball.mass;
+                car.dx -= Math.cos(angle) * impactForce / car.mass;
+                car.dy -= Math.sin(angle) * impactForce / car.mass;
+            }
+        }
+
+        function checkGoal() {
+            if (ball.x - ball.radius < goalWidth && Math.abs(ball.y - canvas.height / 2) < goalHeight / 2) {
+                scores.player2++;
+                resetGame(gameMode === 'player' ? "Player 2" : "AI player");
+            } else if (ball.x + ball.radius > canvas.width - goalWidth && Math.abs(ball.y - canvas.height / 2) < goalHeight / 2) {
+                scores.player1++;
+                resetGame("Player 1");
+            }
+            updateScoreDisplay();
+        }
+
+        function resetGame(scorer) {
+            alert(scorer + " scores!");
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.dx = 0;
+            ball.dy = 0;
+            car1.x = canvas.width * 0.25;
+            car1.y = canvas.height / 2;
+            car1.angle = 0;
+            car1.speed = 0;
+            car1.dx = 0;
+            car1.dy = 0;
+            car2.x = canvas.width * 0.75;
+            car2.y = canvas.height / 2;
+            car2.angle = Math.PI;
+            car2.speed = 0;
+            car2.dx = 0;
+            car2.dy = 0;
+        }
+
+        function updateScoreDisplay() {
+            scoreElement.textContent = `Player 1: ${scores.player1} | ${gameMode === 'player' ? 'Player 2' : 'AI'}: ${scores.player2}`;
+        }
+
+        function update() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            car1.update(ball, car2);
+            car2.update(ball, car1);
+            moveBall();
+            checkCollision(car1);
+            checkCollision(car2);
+            checkGoal();
+
+            drawGoals();
+            car1.draw();
+            car2.draw();
+            drawBall();
+
+            gameLoop = requestAnimationFrame(update);
+        }
+
+        function startGame(mode) {
+            gameMode = mode;
+            menu.style.display = 'none';
+            scoreElement.style.display = 'block';
+            
+            car1 = new Car(canvas.width * 0.25, canvas.height / 2, 'blue');
+            car1.controls = {up: 'w', down: 's', left: 'a', right: 'd'};
+            
+            if (mode === 'player') {
+                car2 = new Car(canvas.width * 0.75, canvas.height / 2, 'red');
+                car2.controls = {up: 'arrowup', down: 'arrowdown', left: 'arrowleft', right: 'arrowright'};
+            } else {
+                car2 = new Car(canvas.width * 0.75, canvas.height / 2, 'red', true);
+            }
+
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.dx = 0;
+            ball.dy = 0;
+
+            scores = { player1: 0, player2: 0 };
+            updateScoreDisplay();
+
+            if (gameLoop) cancelAnimationFrame(gameLoop);
+            update();
+        }
+
+        vsPlayerBtn.addEventListener('click', () => startGame('player'));
+        vsAIBtn.addEventListener('click', () => startGame('ai'));
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+    </script>
+</body>
+</html>
